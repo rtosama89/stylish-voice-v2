@@ -1,12 +1,12 @@
 {
-  "name": "stylish-voice-ultimate",
+  "name": "stylish-english-voice-backend",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
-    "ws": "^8.18.0"
+    "@google/generative-ai": "^0.24.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   }
 }

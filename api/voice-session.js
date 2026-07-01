@@ -1,73 +1,90 @@
-/**
- * Stylish English — Voice Proxy API
- * Bridges browser WebSocket ↔ Google GenAI Live API
- * 
- * Deploy on Vercel: GEMINI_API_KEY stored as env variable
- * Frontend connects via: POST /api/voice-session
- */
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-
-// System prompts by age group
 const SYSTEM_PROMPTS = {
-  boy: `أنت محمد، معلم إنجليزي ودود ومرح بلهجة جيزانية خفيفة. تتحدث مع ولد صغير (6-12 سنة). استخدم كلمات بسيطة وشجّعه كثيراً. علّمه الحروف والكلمات الأساسية بطريقة ممتعة.`,
-  girl: `أنت محمد، معلم إنجليزي ودود ومرح بلهجة جيزانية خفيفة. تتحدث مع بنت صغيرة (6-12 سنة). استخدم كلمات بسيطة وشجّعها كثيراً. علّمها الحروف والكلمات الأساسية بطريقة ممتعة.`,
-  teen: `أنت محمد، معلم إنجليزي شبابي وحماسي بلهجة جيزانية خفيفة. تتحدث مع مراهق/مراهقة (13-17 سنة). استخدم أمثلة من حياتهم اليومية (مدرسة، ألعاب، سوشيال ميديا). حافظ على الحماس.`,
-  adult: `أنت محمد، معلم إنجليزي محترف ومحترم بلهجة جيزانية خفيفة. تتحدث مع شخص بالغ يتعلم الإنجليزية. استخدم أمثلة عملية (عمل، سفر، مقابلات). كن مشجّعاً بدون مبالغة.`
+  boy: `You are Mohammed (محمد), a warm and playful English tutor with a light Jizani accent. You are teaching a young boy (age 6-12). Use simple words, lots of encouragement, and make learning fun. Respond in English first, then give a short Arabic tip in friendly Gulf dialect. Keep responses under 3 sentences in English.`,
+  girl: `You are Mohammed (محمد), a warm and playful English tutor with a light Jizani accent. You are teaching a young girl (age 6-12). Use simple words, lots of encouragement, and make learning fun. Respond in English first, then give a short Arabic tip in friendly Gulf dialect. Keep responses under 3 sentences in English.`,
+  teen: `You are Mohammed (محمد), an energetic English tutor with a light Jizani accent. You are teaching a teenager (age 13-17). Use relatable examples from school, social media, and daily life. Be enthusiastic but not childish. Respond in English first, then give a short Arabic tip in friendly Gulf dialect. Keep responses under 3 sentences in English.`,
+  adult: `You are Mohammed (محمد), a professional and respectful English tutor with a light Jizani accent. You are teaching an adult learner. Use practical examples from work, travel, and daily life. Be encouraging without being patronizing. Respond in English first, then give a short Arabic tip in friendly Gulf dialect. Keep responses under 3 sentences in English.`
 };
 
-module.exports = async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
+export default async function handler(req, res) {
+  // Handle CORS preflight
+  if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed. Use POST." });
   }
 
+  // Validate API key
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
+    console.error("GEMINI_API_KEY is not set in environment variables");
+    return res.status(500).json({
+      error: "Server configuration error",
+      detail: "API key not configured"
+    });
   }
 
+  // Parse and validate request body
+  let body;
   try {
-    const { text, age = 'adult', history = [] } = req.body;
+    body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+  } catch (e) {
+    return res.status(400).json({ error: "Invalid JSON body" });
+  }
 
-    if (!text || typeof text !== 'string') {
-      return res.status(400).json({ error: 'Missing "text" field' });
-    }
+  const { text, age = "adult", history = [] } = body;
 
+  if (!text || typeof text !== "string" || text.trim().length === 0) {
+    return res.status(400).json({ error: 'Missing or empty "text" field' });
+  }
+
+  // Validate age parameter
+  const validAges = ["boy", "girl", "teen", "adult"];
+  const safeAge = validAges.includes(age) ? age : "adult";
+
+  try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ 
-      model: 'gemini-2.0-flash-exp',
-      systemInstruction: SYSTEM_PROMPTS[age] || SYSTEM_PROMPTS.adult
+
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      systemInstruction: SYSTEM_PROMPTS[safeAge],
+      generationConfig: {
+        temperature: 0.8,
+        topP: 0.9,
+        maxOutputTokens: 256
+      }
     });
 
     // Build conversation history
-    const chatHistory = history.map(h => ({
-      role: h.role,
-      parts: [{ text: h.text }]
-    }));
+    const chatHistory = history
+      .filter(h => h && h.role && h.text)
+      .map(h => ({
+        role: h.role === "ai" ? "model" : "user",
+        parts: [{ text: h.text }]
+      }));
 
     const chat = model.startChat({ history: chatHistory });
-    const result = await chat.sendMessage(text);
-    const response = result.response.text();
+
+    const result = await chat.sendMessage(text.trim());
+    const reply = result.response.text();
 
     return res.status(200).json({
-      reply: response,
-      age: age
+      reply: reply,
+      age: safeAge,
+      timestamp: Date.now()
     });
 
   } catch (error) {
-    console.error('GenAI Error:', error);
-    return res.status(500).json({ 
-      error: 'AI processing failed',
-      details: error.message 
+    console.error("Gemini API Error:", error.message);
+
+    // Return user-friendly error
+    const status = error.message?.includes("API_KEY") ? 401 : 500;
+    return res.status(status).json({
+      error: "AI processing failed",
+      detail: error.message?.substring(0, 200) || "Unknown error"
     });
   }
-};
+}
